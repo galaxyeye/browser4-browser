@@ -1,8 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"D:/workspace/Browser4/Browser4-4.12-mini/cli/browser4-cli-c/build/cmake_install.cmake",
-		"D:/workspace/Browser4/Browser4-4.12-mini/cli/browser4-cli-c/build/src/cmake_install.cmake"
-	],
-	"Parallel" : false
-}
