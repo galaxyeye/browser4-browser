@@ -1,5 +1,6 @@
 package ai.platon.browser4.chrome
 
+import ai.platon.browser4.chrome.dom.model.AriaSnapshotOptions
 import ai.platon.browser4.chrome.network.*
 import ai.platon.browser4.api.snapshot.ViewportSpec
 import ai.platon.browser4.chrome.protocol.ClickableDOM
@@ -114,7 +115,6 @@ open class PulsarWebDriver constructor(
 
     private val closed = AtomicBoolean()
 
-    var userTypedUrl: String? = null
     var navigateUrl: String? = chromeTab.url
     private var credentials: Credentials? = null
 
@@ -156,8 +156,6 @@ open class PulsarWebDriver constructor(
 
     @Throws(WebDriverException::class)
     override suspend fun navigate(entry: NavigateEntry) {
-        userTypedUrl = entry.url
-
         navigateHistory.add(entry)
         this.navigateEntry = entry
 
@@ -199,6 +197,8 @@ open class PulsarWebDriver constructor(
             browserProtocol.navigateToHistoryEntry(entryId)
         }
     }
+
+    override fun userTypedUrl(): String = navigateEntry.userTypedUrl
 
     override suspend fun goForward() {
         // Fetch navigation history once before the retry-able invokeOnPage block.
@@ -350,16 +350,69 @@ open class PulsarWebDriver constructor(
         val callable = functionDeclaration.trim().removeSuffix(";").trim()
         return """
             function() {
-                const __browser4Element = this;
-                return ($callable).call(__browser4Element, __browser4Element);
+                return ($callable).call(this, this);
             }
         """.trimIndent()
     }
 
+    @Throws(WebDriverException::class)
+    override suspend fun generateLocator(selector: String): String? {
+        val jsFunction = """
+            element => {
+                if (!element || element.nodeType !== 1) return null;
+
+                function cssEscape(v) {
+                    if (typeof CSS !== 'undefined' && CSS.escape) return CSS.escape(v);
+                    return v.replace(/[!"#${'$'}%&'()*+,./:;<=>?@[\]^`{|}~]/g, '\\${'$'}&');
+                }
+
+                function segmentFor(el) {
+                    var tag = el.tagName.toLowerCase();
+                    if (el.id) return '#' + cssEscape(el.id);
+                    if (el.classList && el.classList.length > 0) {
+                        var classes = Array.from(el.classList).filter(function(c) {
+                            return !/[A-Z]/.test(c) &&
+                                   !/^[a-z]+-[a-z0-9]{6,}${'$'}/.test(c) &&
+                                   c.indexOf('_') === -1 &&
+                                   c.length > 1;
+                        });
+                        if (classes.length > 0) return tag + '.' + classes.map(cssEscape).join('.');
+                    }
+                    if (el.parentNode) {
+                        var siblings = Array.from(el.parentNode.children);
+                        var sameTag = siblings.filter(function(s) { return s.tagName === el.tagName; });
+                        if (sameTag.length > 1) {
+                            return tag + ':nth-of-type(' + (sameTag.indexOf(el) + 1) + ')';
+                        }
+                    }
+                    return tag;
+                }
+
+                var parts = [];
+                var cur = element;
+                while (cur && cur.nodeType === 1) {
+                    parts.unshift(segmentFor(cur));
+                    if (cur.id) break;
+                    if (cur.tagName.toLowerCase() === 'body') break;
+                    cur = cur.parentNode;
+                }
+                return parts.join(' > ');
+            }
+        """.trimIndent()
+
+        val result = evaluateValue(selector, jsFunction)
+        return result?.toString()?.takeIf { it.isNotEmpty() && it != "null" }
+    }
+
     override suspend fun currentUrl(): String {
-        val mainFrameUrl = evaluate("document.URL", navigateUrl)
-        navigateUrl = mainFrameUrl ?: navigateUrl
-        return navigateUrl ?: userTypedUrl ?: ""
+        val docUrl = evaluate("document.URL", "")
+        // When a tab has just been created, document.URL may still be "about:blank"
+        // even though navigation to the target URL has been initiated.  Fall back
+        // to the navigateUrl / userTypedUrl tracked at tab creation time.
+        if (docUrl.isNullOrBlank() || docUrl == "about:blank") {
+            return navigateUrl ?: userTypedUrl().takeIf { it.isNotEmpty() } ?: docUrl.orEmpty()
+        }
+        return docUrl
     }
 
     @Throws(WebDriverException::class)
@@ -632,6 +685,7 @@ open class PulsarWebDriver constructor(
     override suspend fun hover(selector: String) {
         bringToFront()
         rpc.invokeOnElement(selector, "hover", scrollIntoView = true) { node ->
+            waitForScrollSettled(selector)
             emulator.hover(node, position = "center")
         }
     }
@@ -876,15 +930,79 @@ open class PulsarWebDriver constructor(
         if (selector.isNullOrBlank()) {
             rpc.invokeOnPage("press") {
                 keyboard?.press(key, randomDelayMillis("press"))
+                // CDP-dispatched Enter may not trigger implicit form submission (HTML spec §4.10.2.2).
+                // Explicitly submit the nearest form as a safety net. See trySubmitFormOnEnter().
+                if (key == "Enter") {
+                    trySubmitFormOnEnter()
+                }
                 gap("press")
             }
             return
         }
 
         rpc.invokeOnElement(selector, "press", scrollIntoView = true) { node ->
+            page.focusOnSelector(selector)
             emulator.click(node, 1, position = "right")
             keyboard?.press(key, randomDelayMillis("press"))
+            // CDP-dispatched Enter may not trigger implicit form submission (HTML spec §4.10.2.2).
+            // Explicitly submit the nearest form as a safety net. See trySubmitFormOnEnter().
+            if (key == "Enter") {
+                trySubmitFormOnEnter()
+            }
             gap("press")
+        }
+    }
+
+    /**
+     * Triggers form submission when the active element is a form-control inside a `<form>`.
+     *
+     * **Why this exists:**
+     *
+     * CDP `Input.dispatchKeyEvent` (used by `keyboard?.press("Enter")`) sends trusted
+     * `keydown` / `keypress` DOM events, but Chromium does not reliably fire the browser's
+     * *implicit form submission* default action (HTML spec §4.10.2.2) for synthesized
+     * input — even when the events are marked trusted. The result is that pressing Enter
+     * on a search box inside a `<form>` dispatches the correct DOM events, yet the form
+     * never submits and the page never navigates.
+     *
+     * This method is a safety net: after the CDP key events land, it checks whether the
+     * active element is a form-control eligible for implicit submission, and if so
+     * explicitly calls `form.requestSubmit()` (with fallback to `form.submit()`).
+     *
+     * **Elements excluded (Enter does *not* implicitly submit for these):**
+     * - `<textarea>` — Enter inserts a newline
+     * - `<input type="radio|checkbox|file|button|reset|submit|image|hidden">`
+     * - Any element not inside a `<form>`
+     */
+    private suspend fun trySubmitFormOnEnter() {
+        runCatching {
+            browserProtocol.evaluate(
+                expression = """
+                    (() => {
+                        const el = document.activeElement;
+                        if (!el) return false;
+                        const tag = el.tagName;
+                        if (tag === 'TEXTAREA') return false;
+                        if (tag !== 'INPUT' && tag !== 'SELECT') return false;
+                        if (tag === 'INPUT') {
+                            const t = (el.type || 'text').toLowerCase();
+                            if (t === 'radio' || t === 'checkbox' || t === 'file' ||
+                                t === 'button' || t === 'reset' || t === 'submit' ||
+                                t === 'image' || t === 'hidden') {
+                                return false;
+                            }
+                        }
+                        const form = el.closest('form');
+                        if (!form) return false;
+                        if (typeof form.requestSubmit === 'function') {
+                            try { form.requestSubmit(); return true; } catch (e) {}
+                        }
+                        form.submit();
+                        return true;
+                    })()
+                """.trimIndent(),
+                returnByValue = true,
+            )
         }
     }
 
@@ -993,6 +1111,11 @@ open class PulsarWebDriver constructor(
         return rpc.invokeDeferredSilently("ariaSnapshot") { page.ariaSnapshot(viewportIndices) } ?: ""
     }
 
+    @Throws(WebDriverException::class)
+    override suspend fun ariaSnapshot(options: AriaSnapshotOptions): String {
+        return rpc.invokeDeferredSilently("ariaSnapshot") { page.ariaSnapshot(options) } ?: ""
+    }
+
     @Beta
     @Throws(WebDriverException::class)
     override suspend fun querySelectorAll(selector: String): List<NodeRef> {
@@ -1063,8 +1186,9 @@ function() {
     override suspend fun selectAttributeAll(selector: String, attrName: String, start: Int, limit: Int): List<String> {
         val end = start + limit
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
+        val encodedAttrName = encodeJsonString(attrName)
 
-        val expression = "__pulsar_utils__.selectAttributeAll('$safeSelector', '$attrName', $start, $end)"
+        val expression = "__pulsar_utils__.selectAttributeAll('$safeSelector', $encodedAttrName, $start, $end)"
         val jsonStr = evaluate(expression)?.toString() ?: return listOf()
         return json.decodeFromString<List<String>>(jsonStr)
     }
@@ -1072,20 +1196,25 @@ function() {
     @Throws(WebDriverException::class)
     override suspend fun setAttribute(selector: String, attrName: String, attrValue: String) {
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
-        evaluate("__pulsar_utils__.setAttribute('$safeSelector', '$attrName', '$attrValue')")
+        val encodedName = encodeJsonString(attrName)
+        val encodedValue = encodeJsonString(attrValue)
+        evaluate("__pulsar_utils__.setAttribute('$safeSelector', $encodedName, $encodedValue)")
     }
 
     @Throws(WebDriverException::class)
     override suspend fun setAttributeAll(selector: String, attrName: String, attrValue: String) {
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
-        evaluate("__pulsar_utils__.setAttributeAll('$safeSelector', '$attrName', '$attrValue')")
+        val encodedName = encodeJsonString(attrName)
+        val encodedValue = encodeJsonString(attrValue)
+        evaluate("__pulsar_utils__.setAttributeAll('$safeSelector', $encodedName, $encodedValue)")
     }
 
     // --------------------------- Property helpers ---------------------------
     @Throws(WebDriverException::class)
     override suspend fun selectFirstPropertyValueOrNull(selector: String, propName: String): String? {
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
-        return evaluateValue("__pulsar_utils__.selectFirstPropertyValue('$safeSelector', '$propName')")?.toString()
+        val encodedPropName = encodeJsonString(propName)
+        return evaluateValue("__pulsar_utils__.selectFirstPropertyValue('$safeSelector', $encodedPropName)")?.toString()
     }
 
     @Throws(WebDriverException::class)
@@ -1094,7 +1223,8 @@ function() {
     ): List<String> {
         val end = start + limit
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
-        val expression = "__pulsar_utils__.selectPropertyValueAll('$safeSelector', '$propName', $start, $end)"
+        val encodedPropName = encodeJsonString(propName)
+        val expression = "__pulsar_utils__.selectPropertyValueAll('$safeSelector', $encodedPropName, $start, $end)"
         val jsonStr = evaluate(expression)?.toString() ?: return listOf()
         return json.decodeFromString<List<String>>(jsonStr)
     }
@@ -1102,25 +1232,32 @@ function() {
     @Throws(WebDriverException::class)
     override suspend fun setProperty(selector: String, propName: String, propValue: String) {
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
-        evaluate("__pulsar_utils__.setProperty('$safeSelector', '$propName', '$propValue')")
+        val encodedName = encodeJsonString(propName)
+        val encodedValue = encodeJsonString(propValue)
+        evaluate("__pulsar_utils__.setProperty('$safeSelector', $encodedName, $encodedValue)")
     }
 
     @Throws(WebDriverException::class)
     override suspend fun setPropertyAll(selector: String, propName: String, propValue: String) {
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
-        evaluate("__pulsar_utils__.setPropertyAll('$safeSelector', '$propName', '$propValue')")
+        val encodedName = encodeJsonString(propName)
+        val encodedValue = encodeJsonString(propValue)
+        evaluate("__pulsar_utils__.setPropertyAll('$safeSelector', $encodedName, $encodedValue)")
     }
 
     @Throws(WebDriverException::class)
     override suspend fun clickTextMatches(selector: String, pattern: String, count: Int) {
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
-        evaluate("__pulsar_utils__.clickTextMatches('$safeSelector', '$pattern')")
+        val encodedPattern = encodeJsonString(pattern)
+        evaluate("__pulsar_utils__.clickTextMatches('$safeSelector', $encodedPattern)")
     }
 
     @Throws(WebDriverException::class)
     override suspend fun clickMatches(selector: String, attrName: String, pattern: String, count: Int) {
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
-        evaluate("__pulsar_utils__.clickMatches('$safeSelector', '$attrName', '$pattern')")
+        val encodedAttrName = encodeJsonString(attrName)
+        val encodedPattern = encodeJsonString(pattern)
+        evaluate("__pulsar_utils__.clickMatches('$safeSelector', $encodedAttrName, $encodedPattern)")
     }
 
     @Throws(WebDriverException::class)
@@ -1606,7 +1743,7 @@ function() {
                 logger.debug(
                     "Injected Browser4 runtime into Isolated World (context: {}) | {}",
                     contextId,
-                    StringUtils.abbreviateMiddle(userTypedUrl, "...", 200)
+                    StringUtils.abbreviateMiddle(userTypedUrl(), "...", 200)
                 )
                 val evaluate = browserProtocol.evaluate("typeof(__pulsar_utils__)", contextId = contextId)
                 if (evaluate.result.value?.jsonPrimitive?.content != "function") {

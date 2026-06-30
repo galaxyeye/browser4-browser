@@ -97,6 +97,10 @@ data class NavigateEntry constructor(
         }
     }
 
+    fun updateState(action: String) {
+        refresh(action)
+    }
+
     fun synchronized(action: () -> Unit) {
         lock.withLock(action)
     }

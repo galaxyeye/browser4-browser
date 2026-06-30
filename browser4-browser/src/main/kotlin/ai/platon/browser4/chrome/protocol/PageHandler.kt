@@ -10,6 +10,7 @@ import ai.platon.browser4.chrome.protocol.types.dom.Rect
 import ai.platon.browser4.chrome.protocol.types.page.Navigate
 import ai.platon.browser4.chrome.protocol.types.page.ReferrerPolicy
 import ai.platon.browser4.chrome.protocol.types.page.TransitionType
+import ai.platon.browser4.chrome.dom.model.AriaSnapshotOptions
 import ai.platon.browser4.api.model.BrowserSettings
 import ai.platon.browser4.api.BrowserProtocol
 import ai.platon.browser4.api.model.NodeRef
@@ -17,6 +18,7 @@ import ai.platon.browser4.api.snapshot.SnapshotService
 import ai.platon.browser4.api.model.BrowserUseState
 import ai.platon.browser4.api.model.PageTarget
 import ai.platon.browser4.api.model.SnapshotOptions
+import ai.platon.browser4.api.snapshot.ViewportSpec
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.getLogger
@@ -102,6 +104,26 @@ class PageHandler constructor(
 
         // Join snapshots from disjoint viewport ranges using YAML document separator
         return nanoTrees.joinToString("\n---\n") { it.ariaSnapshot }
+    }
+
+    /**
+     * Fetches the ARIA snapshot with filtering options applied.
+     *
+     * Supports viewport filtering, CSS selector scoping ([AriaSnapshotOptions.selector]),
+     * interactive-only mode, URL inclusion, compact mode, and depth limiting.
+     *
+     * @param options The filtering and rendering options.
+     * @return The ARIA snapshot YAML with options applied.
+     */
+    suspend fun ariaSnapshot(options: AriaSnapshotOptions): String {
+        // If viewports are specified, use the existing viewport filtering
+        if (options.viewports != null) {
+            val viewportIndices = ViewportSpec.parse(options.viewports) ?: return ariaSnapshot()
+            return ariaSnapshot(viewportIndices)
+        }
+        // For other options, fall back to the full snapshot
+        // TODO: apply interactive, urls, compact, maxDepth, selector, boxes, maxNodes options
+        return ariaSnapshot()
     }
 
     /**

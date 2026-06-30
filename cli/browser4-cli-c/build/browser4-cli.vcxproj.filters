@@ -1,0 +1,40 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="D:\workspace\Browser4\Browser4-4.12-mini\cli\browser4-cli-c\src\main.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\workspace\Browser4\Browser4-4.12-mini\cli\browser4-cli-c\src\args.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\workspace\Browser4\Browser4-4.12-mini\cli\browser4-cli-c\src\commands.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\workspace\Browser4\Browser4-4.12-mini\cli\browser4-cli-c\src\help.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\workspace\Browser4\Browser4-4.12-mini\cli\browser4-cli-c\src\http.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\workspace\Browser4\Browser4-4.12-mini\cli\browser4-cli-c\src\snapshot.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\workspace\Browser4\Browser4-4.12-mini\cli\browser4-cli-c\src\state.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\workspace\Browser4\Browser4-4.12-mini\cli\browser4-cli-c\src\error.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\workspace\Browser4\Browser4-4.12-mini\cli\browser4-cli-c\src\json.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="D:\workspace\Browser4\Browser4-4.12-mini\cli\browser4-cli-c\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{B6C0D489-DE82-3927-9BC7-BF9B5843D9B8}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

@@ -19,6 +19,7 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import ai.platon.browser4.chrome.dom.model.AriaSnapshotOptions
 import ai.platon.browser4.api.annotations.Beta
 import java.io.Closeable
 import java.time.Duration
@@ -341,6 +342,13 @@ interface WebDriver : Closeable {
     @Throws(WebDriverException::class)
     @MCP
     suspend fun goForward()
+
+    /**
+     * Returns the user typed url in the address bar. @mcp
+     *
+     * @return The user typed url in the address bar.
+     * */
+    fun userTypedUrl(): String
 
     /**
      * Returns a string representing the current URL that the browser is looking at. @mcp
@@ -1248,14 +1256,14 @@ interface WebDriver : Closeable {
      * Scroll to the 2.5th viewport position. @mcp
      *
      * ```kotlin
-     * driver.scrollToViewport(1.0)
+     * driver.scrollToViewport(0.0)
+     * driver.scrollToViewport(0.5)
      * driver.scrollToViewport(1.5)
-     * driver.scrollToViewport(2.5)
-     * driver.scrollToViewport(3.0)
+     * driver.scrollToViewport(2.0)
      * ```
      *
-     * @param n The viewport number of the page to scroll to (1-based).
-     * 1.00 means at the top of the first screen, 2.50 means halfway through the second screen.
+     * @param n The viewport number of the page to scroll to (0-based).
+     * 0.00 means at the top of the first screen, 1.50 means halfway through the second screen.
      */
     @Throws(WebDriverException::class)
     @MCP
@@ -1904,6 +1912,21 @@ interface WebDriver : Closeable {
     suspend fun evaluateValueDetail(selector: String, functionDeclaration: String): JsEvaluation?
 
     /**
+     * Generates a unique CSS selector path for the element located by [selector]. @mcp
+     *
+     * Walks up the DOM from the target element, building a CSS selector segment for
+     * each ancestor using the best available strategy: `#id`, `tag.stable-classes`,
+     * or `tag:nth-of-type(n)`. The resulting path is joined with `>` separators,
+     * producing a concise, human-readable selector suitable for use in other commands.
+     *
+     * @param selector CSS selector or element reference (e5, backend:15).
+     * @return A CSS selector path string such as `#main > div.content > a:nth-of-type(3)`, or null if not found.
+     */
+    @Throws(WebDriverException::class)
+    @MCP
+    suspend fun generateLocator(selector: String): String?
+
+    /**
      * Capture a screenshot of the current viewport (or primary browsing context) after ensuring any pending layout. @mcp
      *
      * If the backend supports element-centric capture this may represent the full page; implementation specific.
@@ -1970,6 +1993,20 @@ interface WebDriver : Closeable {
     @Throws(WebDriverException::class)
     @MCP
     suspend fun ariaSnapshot(viewports: String): String = ariaSnapshot()
+
+    /**
+     * Return the ARIA snapshot (accessibility tree in YAML format) with filtering
+     * [options] applied. @mcp
+     *
+     * Supports interactive-only mode, URL inclusion, compact mode, depth limiting,
+     * CSS selector scoping, and viewport filtering. All options compose.
+     *
+     * @param options The filtering and rendering options.
+     * @return The ARIA snapshot YAML with options applied.
+     */
+    @Throws(WebDriverException::class)
+    @MCP
+    suspend fun ariaSnapshot(options: AriaSnapshotOptions): String = ariaSnapshot()
 
     /**
      * Calculate the clickable point of an element located by [selector]. @mcp

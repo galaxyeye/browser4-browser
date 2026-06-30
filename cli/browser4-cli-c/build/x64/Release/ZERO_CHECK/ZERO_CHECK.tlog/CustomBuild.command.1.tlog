@@ -1,0 +1,10 @@
+^D:\WORKSPACE\BROWSER4\BROWSER4-4.12-MINI\CLI\BROWSER4-CLI-C\BUILD\CMAKEFILES\9C43623EC112EDA5A086CEC21D16B5A3\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SD:/workspace/Browser4/Browser4-4.12-mini/cli/browser4-cli-c -BD:/workspace/Browser4/Browser4-4.12-mini/cli/browser4-cli-c/build --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file D:/workspace/Browser4/Browser4-4.12-mini/cli/browser4-cli-c/build/browser4-cli.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
